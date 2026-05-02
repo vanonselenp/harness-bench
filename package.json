@@ -1,0 +1,10 @@
+{
+  "name": "multi-harness-rig",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Rig for comparing AI coding harnesses on a TypeScript API client task",
+  "devDependencies": {
+    "vitest": "1.5.0"
+  }
+}

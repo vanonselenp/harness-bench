@@ -1,0 +1,343 @@
+openapi: 3.1.0
+info:
+  title: Library API
+  version: 1.0.0
+  description: |
+    A small library management API. Books, members, loans, and fines.
+    Used as a fixture for harness comparison experiments.
+servers:
+  - url: http://localhost:4040
+    description: Local mock server
+
+paths:
+  /books:
+    get:
+      operationId: listBooks
+      summary: List books with cursor pagination
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Opaque cursor from a previous response. Omit for first page.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: genre
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Genre'
+        - name: available_only
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: |
+            When true, only books with at least one available copy are returned.
+            When false (default), all books regardless of availability.
+      responses:
+        '200':
+          description: A page of books
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Book'
+                  page:
+                    type: object
+                    required: [has_more]
+                    properties:
+                      has_more:
+                        type: boolean
+                      next_cursor:
+                        type: string
+                        nullable: true
+                        description: Present only when has_more is true.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /books/{book_id}:
+    get:
+      operationId: getBook
+      summary: Get a single book by ID
+      parameters:
+        - name: book_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The book
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Book'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /members/{member_id}/loans:
+    get:
+      operationId: listMemberLoans
+      summary: List a member's loans (active and historical)
+      parameters:
+        - name: member_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [active, returned, all]
+            default: all
+      responses:
+        '200':
+          description: |
+            Returns a list of loans. Each loan is one of two shapes
+            distinguished by the `status` field:
+            - `ActiveLoan` (status: "active") has `due_date` and `renewals_remaining`
+            - `ReturnedLoan` (status: "returned") has `returned_at` and `late_days`
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/ActiveLoan'
+                    - $ref: '#/components/schemas/ReturnedLoan'
+                  discriminator:
+                    propertyName: status
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /loans:
+    post:
+      operationId: createLoan
+      summary: Create a new loan for a member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [member_id, book_id]
+              properties:
+                member_id:
+                  type: string
+                book_id:
+                  type: string
+                duration_days:
+                  type: integer
+                  minimum: 1
+                  maximum: 90
+                  default: 14
+      responses:
+        '201':
+          description: Loan created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActiveLoan'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Book unavailable or member already has this book on loan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /fines/{fine_id}/pay:
+    post:
+      operationId: payFine
+      summary: Initiate fine payment (asynchronous)
+      parameters:
+        - name: fine_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount_pence, payment_method]
+              properties:
+                amount_pence:
+                  type: integer
+                  minimum: 1
+                payment_method:
+                  type: string
+                  enum: [card, cash, account_credit]
+      responses:
+        '202':
+          description: |
+            Payment accepted for processing. The client must poll the
+            status URL in the Location header until completion.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+                description: URL to poll for payment status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [payment_id, status]
+                properties:
+                  payment_id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [pending]
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /payments/{payment_id}:
+    get:
+      operationId: getPaymentStatus
+      summary: Poll payment status
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current payment status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [payment_id, status]
+                properties:
+                  payment_id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [pending, succeeded, failed]
+                  failure_reason:
+                    type: string
+                    description: Present only when status is "failed"
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  schemas:
+    Genre:
+      type: string
+      enum: [fiction, non_fiction, reference, periodical, childrens]
+
+    Book:
+      type: object
+      required: [id, title, author, genre, copies_total, copies_available]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        author:
+          type: string
+        genre:
+          $ref: '#/components/schemas/Genre'
+        copies_total:
+          type: integer
+          minimum: 0
+        copies_available:
+          type: integer
+          minimum: 0
+        isbn:
+          type: string
+          nullable: true
+
+    ActiveLoan:
+      type: object
+      required: [id, member_id, book_id, status, loaned_at, due_date, renewals_remaining]
+      properties:
+        id:
+          type: string
+        member_id:
+          type: string
+        book_id:
+          type: string
+        status:
+          type: string
+          enum: [active]
+        loaned_at:
+          type: string
+          format: date-time
+        due_date:
+          type: string
+          format: date
+        renewals_remaining:
+          type: integer
+          minimum: 0
+
+    ReturnedLoan:
+      type: object
+      required: [id, member_id, book_id, status, loaned_at, returned_at, late_days]
+      properties:
+        id:
+          type: string
+        member_id:
+          type: string
+        book_id:
+          type: string
+        status:
+          type: string
+          enum: [returned]
+        loaned_at:
+          type: string
+          format: date-time
+        returned_at:
+          type: string
+          format: date-time
+        late_days:
+          type: integer
+          minimum: 0
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
