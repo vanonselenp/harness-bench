@@ -38,11 +38,11 @@ case "$HARNESS" in
     OVERRIDE_VAR="CODEX_CMD"
     ;;
   opencode-gpt)
-    DEFAULT_CMD='opencode run "$RUN_PROMPT"'
+    DEFAULT_CMD='opencode run --model gpt-5.5 "$RUN_PROMPT"'
     OVERRIDE_VAR="OPENCODE_GPT_CMD"
     ;;
   opencode-opus)
-    DEFAULT_CMD='opencode run "$RUN_PROMPT"'
+    DEFAULT_CMD='opencode run --model claude-opus-4-6 "$RUN_PROMPT"'
     OVERRIDE_VAR="OPENCODE_OPUS_CMD"
     ;;
   pi-gpt)

@@ -57,7 +57,7 @@ You can override the launch command for local config differences:
 ```bash
 CLAUDE_CODE_CMD='claude --model claude-opus-4-7 "$RUN_PROMPT"' ./runner/run-single.sh claude-code 1
 CODEX_CMD='codex exec --model gpt-5.5 "$RUN_PROMPT"' ./runner/run-single.sh codex 1
-OPENCODE_GPT_CMD='opencode run "$RUN_PROMPT"' ./runner/run-single.sh opencode-gpt 1
+OPENCODE_GPT_CMD='opencode run --model gpt-5.5 "$RUN_PROMPT"' ./runner/run-single.sh opencode-gpt 1
 ```
 
 For `claude-code` runs, setup also writes
