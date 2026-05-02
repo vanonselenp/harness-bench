@@ -55,8 +55,8 @@ case "$HARNESS" in
     ;;
 esac
 
-if [ -n "${!OVERRIDE_VAR+x}" ]; then
-  CMD="${!OVERRIDE_VAR}"
+if OVERRIDE_CMD="$(printenv "$OVERRIDE_VAR")"; then
+  CMD="$OVERRIDE_CMD"
   USE_OVERRIDE=1
 else
   CMD="$DEFAULT_CMD"
@@ -93,30 +93,26 @@ if [ "$USE_OVERRIDE" -eq 1 ]; then
 else
   case "$HARNESS" in
     claude-code)
-      ( cd "$WORKSPACE" && claude --model claude-opus-4-7 "$RUN_PROMPT" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
-      HARNESS_EXIT=${PIPESTATUS[0]}
+      COMMAND=(claude --model claude-opus-4-7 "$RUN_PROMPT")
       ;;
     codex)
-      ( cd "$WORKSPACE" && codex exec --model gpt-5.5 "$RUN_PROMPT" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
-      HARNESS_EXIT=${PIPESTATUS[0]}
+      COMMAND=(codex exec --model gpt-5.5 "$RUN_PROMPT")
       ;;
     opencode-gpt)
-      ( cd "$WORKSPACE" && opencode run --model openai/gpt-5.5 "$RUN_PROMPT" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
-      HARNESS_EXIT=${PIPESTATUS[0]}
+      COMMAND=(opencode run --model openai/gpt-5.5 "$RUN_PROMPT")
       ;;
     opencode-opus)
-      ( cd "$WORKSPACE" && opencode run --model github-copilot/claude-opus-4.6 "$RUN_PROMPT" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
-      HARNESS_EXIT=${PIPESTATUS[0]}
+      COMMAND=(opencode run --model github-copilot/claude-opus-4.6 "$RUN_PROMPT")
       ;;
     pi-gpt)
-      ( cd "$WORKSPACE" && pi "$RUN_PROMPT" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
-      HARNESS_EXIT=${PIPESTATUS[0]}
+      COMMAND=(pi "$RUN_PROMPT")
       ;;
     pi-opus)
-      ( cd "$WORKSPACE" && pi "$RUN_PROMPT" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
-      HARNESS_EXIT=${PIPESTATUS[0]}
+      COMMAND=(pi "$RUN_PROMPT")
       ;;
   esac
+  ( cd "$WORKSPACE" && "${COMMAND[@]}" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
+  HARNESS_EXIT=${PIPESTATUS[0]}
 fi
 set -e
 
