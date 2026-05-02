@@ -36,6 +36,7 @@ DIFF_LINES=$(wc -l < "$DIFF_FILE" | tr -d ' ')
 # to look for the harness output.
 echo "==> running hidden tests against $WORKSPACE"
 cd "$RIG_ROOT"
+rm -f "$RIG_ROOT/hidden/last-grade.json"
 
 # Make sure vitest is available at the rig root
 if [ ! -d "$RIG_ROOT/node_modules" ]; then

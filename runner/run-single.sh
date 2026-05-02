@@ -38,11 +38,11 @@ case "$HARNESS" in
     OVERRIDE_VAR="CODEX_CMD"
     ;;
   opencode-gpt)
-    DEFAULT_CMD='opencode run --model gpt-5.5 "$RUN_PROMPT"'
+    DEFAULT_CMD='opencode run --model openai/gpt-5.5 "$RUN_PROMPT"'
     OVERRIDE_VAR="OPENCODE_GPT_CMD"
     ;;
   opencode-opus)
-    DEFAULT_CMD='opencode run --model claude-opus-4-6 "$RUN_PROMPT"'
+    DEFAULT_CMD='opencode run --model github-copilot/claude-opus-4.6 "$RUN_PROMPT"'
     OVERRIDE_VAR="OPENCODE_OPUS_CMD"
     ;;
   pi-gpt)
@@ -84,6 +84,12 @@ set +e
 ) 2>&1 | tee "$RUN_DIR/transcript.txt"
 HARNESS_EXIT=${PIPESTATUS[0]}
 set -e
+
+if [ "$HARNESS_EXIT" -eq 0 ] && grep -Eq 'ProviderModelNotFoundError|Provider.*not found|Model not found' "$RUN_DIR/transcript.txt"; then
+  echo
+  echo "==> detected model/provider launch failure in transcript"
+  HARNESS_EXIT=1
+fi
 
 END_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
