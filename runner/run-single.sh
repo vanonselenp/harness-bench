@@ -55,7 +55,13 @@ case "$HARNESS" in
     ;;
 esac
 
-CMD="${!OVERRIDE_VAR:-$DEFAULT_CMD}"
+if [ -n "${!OVERRIDE_VAR+x}" ]; then
+  CMD="${!OVERRIDE_VAR}"
+  USE_OVERRIDE=1
+else
+  CMD="$DEFAULT_CMD"
+  USE_OVERRIDE=0
+fi
 START_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 node -e '
@@ -78,11 +84,40 @@ echo "    command:    $CMD"
 echo
 
 set +e
-(
-  cd "$WORKSPACE"
-  bash -lc "$CMD"
-) 2>&1 | tee "$RUN_DIR/transcript.txt"
-HARNESS_EXIT=${PIPESTATUS[0]}
+if [ "$USE_OVERRIDE" -eq 1 ]; then
+  (
+    cd "$WORKSPACE"
+    bash -lc "$CMD"
+  ) 2>&1 | tee "$RUN_DIR/transcript.txt"
+  HARNESS_EXIT=${PIPESTATUS[0]}
+else
+  case "$HARNESS" in
+    claude-code)
+      ( cd "$WORKSPACE" && claude --model claude-opus-4-7 "$RUN_PROMPT" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
+      HARNESS_EXIT=${PIPESTATUS[0]}
+      ;;
+    codex)
+      ( cd "$WORKSPACE" && codex exec --model gpt-5.5 "$RUN_PROMPT" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
+      HARNESS_EXIT=${PIPESTATUS[0]}
+      ;;
+    opencode-gpt)
+      ( cd "$WORKSPACE" && opencode run --model openai/gpt-5.5 "$RUN_PROMPT" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
+      HARNESS_EXIT=${PIPESTATUS[0]}
+      ;;
+    opencode-opus)
+      ( cd "$WORKSPACE" && opencode run --model github-copilot/claude-opus-4.6 "$RUN_PROMPT" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
+      HARNESS_EXIT=${PIPESTATUS[0]}
+      ;;
+    pi-gpt)
+      ( cd "$WORKSPACE" && pi "$RUN_PROMPT" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
+      HARNESS_EXIT=${PIPESTATUS[0]}
+      ;;
+    pi-opus)
+      ( cd "$WORKSPACE" && pi "$RUN_PROMPT" ) 2>&1 | tee "$RUN_DIR/transcript.txt"
+      HARNESS_EXIT=${PIPESTATUS[0]}
+      ;;
+  esac
+fi
 set -e
 
 if [ "$HARNESS_EXIT" -eq 0 ] && grep -Eq 'ProviderModelNotFoundError|Provider.*not found|Model not found' "$RUN_DIR/transcript.txt"; then
