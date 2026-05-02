@@ -23,6 +23,31 @@ the harness produced. The hidden tests are never visible to the harness.
 
 ## How to run a single cell
 
+One-command setup and launch:
+
+```bash
+./runner/run-single.sh <harness> <run-number>
+# e.g. ./runner/run-single.sh claude-code 1
+```
+
+This creates `results/<harness>/run-XX/workspace/`, starts the selected
+harness from inside that workspace, passes in `prompt.md`, and records the
+conversation to `transcript.txt`. After the harness exits, grade it:
+
+```bash
+./runner/grade-run.sh <harness> <run-number>
+```
+
+You can override the launch command for local config differences:
+
+```bash
+CLAUDE_CODE_CMD='claude --model claude-opus-4-7 "$RUN_PROMPT"' ./runner/run-single.sh claude-code 1
+CODEX_CMD='codex exec --model gpt-5.5 "$RUN_PROMPT"' ./runner/run-single.sh codex 1
+OPENCODE_GPT_CMD='opencode run "$RUN_PROMPT"' ./runner/run-single.sh opencode-gpt 1
+```
+
+Manual setup flow:
+
 ```bash
 # Set up a fresh working directory for one run
 ./runner/setup-run.sh <harness> <run-number>
