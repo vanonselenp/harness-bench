@@ -23,7 +23,21 @@ the harness produced. The hidden tests are never visible to the harness.
 
 ## How to run a single cell
 
-One-command setup and launch:
+One-command setup, launch, and grade:
+
+```bash
+./runner/run-and-grade.sh <harness> <run-number>
+# e.g. ./runner/run-and-grade.sh claude-code 1
+```
+
+If the harness command exits non-zero, grading is skipped by default. To grade
+whatever was produced anyway:
+
+```bash
+GRADE_ON_FAILURE=1 ./runner/run-and-grade.sh <harness> <run-number>
+```
+
+One-command setup and launch only:
 
 ```bash
 ./runner/run-single.sh <harness> <run-number>
