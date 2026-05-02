@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+coverage/
+
+# Benchmark outputs
+results/
+hidden/last-grade.json
+
+# Logs and temporary files
+*.log
+*.tmp
+.tmp/
+tmp/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor/IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
