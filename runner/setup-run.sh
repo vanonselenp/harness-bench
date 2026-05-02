@@ -36,6 +36,13 @@ cp -R "$RIG_ROOT/starting-state/." "$WORKSPACE/"
 mkdir -p "$WORKSPACE/spec"
 cp "$RIG_ROOT/spec/library-api.yaml" "$WORKSPACE/spec/"
 
+# Claude Code can read workspace-local settings before it starts. Seed a
+# narrow permission allowlist so routine client-building commands do not block.
+if [ "$HARNESS" = "claude-code" ]; then
+  mkdir -p "$WORKSPACE/.claude"
+  cp "$RIG_ROOT/runner/claude-settings.json" "$WORKSPACE/.claude/settings.json"
+fi
+
 # Install deps so the harness can run typecheck/test against its own work
 ( cd "$WORKSPACE" && npm install --silent --no-audit --no-fund ) || {
   echo "WARN: npm install failed — continue anyway, harness can install"

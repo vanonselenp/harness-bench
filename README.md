@@ -60,6 +60,11 @@ CODEX_CMD='codex exec --model gpt-5.5 "$RUN_PROMPT"' ./runner/run-single.sh code
 OPENCODE_GPT_CMD='opencode run "$RUN_PROMPT"' ./runner/run-single.sh opencode-gpt 1
 ```
 
+For `claude-code` runs, setup also writes
+`workspace/.claude/settings.json` from `runner/claude-settings.json`. This
+pre-approves routine file edits and local project commands while leaving any
+other shell command subject to Claude Code's normal prompt.
+
 Manual setup flow:
 
 ```bash
