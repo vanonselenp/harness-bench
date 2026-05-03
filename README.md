@@ -20,6 +20,8 @@ Build a typed TypeScript client for a synthetic Library API given an
 OpenAPI spec. The same prompt, AGENTS.md, and starting state are used
 for every run. After each run, a hidden test suite runs against whatever
 the harness produced. The hidden tests are never visible to the harness.
+The grader treats build failures as benchmark failures before running the
+hidden behaviour tests.
 
 ## How to run a single cell
 

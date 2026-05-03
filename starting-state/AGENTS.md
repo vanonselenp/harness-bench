@@ -25,10 +25,17 @@ The OpenAPI spec is in `spec/library-api.yaml`. Your code goes in `src/`.
 - For evaluation consistency, export a `LibraryClient` class from
   `src/index.ts`, constructible with `{ baseUrl }`, whose public method names
   exactly match the OpenAPI `operationId`s.
+- Provide one ergonomic helper for collecting all books across cursor pages.
+  Choose one clear design, for example `listAllBooks(params)`, an async
+  iterator such as `iterBooks(params)`, or `listBooks({ autoPaginate: true })`.
+- API errors should be structured enough for callers to branch on HTTP status
+  and API error code/message.
+- `npm run build` must pass. Run `npm test` or comparable local validation
+  before declaring the work complete.
 
 # What "complete" looks like
 
 The client should expose a clean API for every operation in the spec,
 handle the spec's pagination, polymorphic response, and async payment
-flow appropriately, and present errors in a way a calling application
-can act on.
+flow appropriately, include the all-books pagination helper, and present
+errors in a way a calling application can act on.

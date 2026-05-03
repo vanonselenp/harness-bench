@@ -17,12 +17,13 @@ if [ ! -d "$WORKSPACE" ]; then
   exit 1
 fi
 
-# Try to build the workspace if there's a tsconfig — we want to test
-# the compiled output where possible.
+# Build the workspace first. This is a typed-client benchmark, so a
+# non-compiling solution is a grading failure rather than a warning.
 echo "==> attempting build in workspace"
-( cd "$WORKSPACE" && npm run build --silent 2>&1 ) || {
-  echo "WARN: build failed or no build script — tests will try src/ directly"
-}
+set +e
+( cd "$WORKSPACE" && npm run build --silent ) > "$RUN_DIR/build-output.txt" 2>&1
+BUILD_EXIT=$?
+set -e
 
 # Capture diff against starting state (rough — for metrics only)
 # Exclude node_modules and dist so the count reflects the harness's own work.
@@ -32,9 +33,6 @@ DIFF_FILE="$RUN_DIR/diff.patch"
   starting-state "$WORKSPACE" > "$DIFF_FILE" 2>/dev/null ) || true
 DIFF_LINES=$(wc -l < "$DIFF_FILE" | tr -d ' ')
 
-# Run the hidden tests with vitest. WORKSPACE_DIR tells the suite where
-# to look for the harness output.
-echo "==> running hidden tests against $WORKSPACE"
 cd "$RIG_ROOT"
 rm -f "$RIG_ROOT/hidden/last-grade.json"
 
@@ -43,15 +41,24 @@ if [ ! -d "$RIG_ROOT/node_modules" ]; then
   ( cd "$RIG_ROOT" && npm install --silent --no-audit --no-fund vitest@1.5.0 )
 fi
 
-set +e
-WORKSPACE_DIR="$WORKSPACE" \
-  npx vitest run --config "$RIG_ROOT/vitest.hidden.config.mjs" \
-  > "$RUN_DIR/test-output.txt" 2>&1
-TEST_EXIT=$?
-set -e
+if [ "$BUILD_EXIT" -eq 0 ]; then
+  # Run the hidden tests with vitest. WORKSPACE_DIR tells the suite where
+  # to look for the harness output.
+  echo "==> running hidden tests against $WORKSPACE"
+  set +e
+  WORKSPACE_DIR="$WORKSPACE" \
+    npx vitest run --config "$RIG_ROOT/vitest.hidden.config.mjs" \
+    > "$RUN_DIR/test-output.txt" 2>&1
+  TEST_EXIT=$?
+  set -e
+else
+  echo "ERROR: build failed — skipping hidden tests"
+  cp "$RUN_DIR/build-output.txt" "$RUN_DIR/test-output.txt"
+  TEST_EXIT=$BUILD_EXIT
+fi
 
 # vitest writes JSON output to hidden/last-grade.json
-if [ -f "$RIG_ROOT/hidden/last-grade.json" ]; then
+if [ "$BUILD_EXIT" -eq 0 ] && [ -f "$RIG_ROOT/hidden/last-grade.json" ]; then
   cp "$RIG_ROOT/hidden/last-grade.json" "$RUN_DIR/grade.json"
 
   # Pull a quick summary
@@ -66,7 +73,13 @@ if [ -f "$RIG_ROOT/hidden/last-grade.json" ]; then
 else
   PASS=0
   TOTAL=0
-  echo "WARN: no grade.json produced"
+  if [ "$BUILD_EXIT" -ne 0 ]; then
+    cat > "$RUN_DIR/grade.json" <<JSON
+{"success":false,"numPassedTests":0,"numTotalTests":0,"testResults":[],"message":"build failed; hidden tests were not run"}
+JSON
+  else
+    echo "WARN: no grade.json produced"
+  fi
 fi
 
 # Build metrics.json — combines auto-captured and to-be-filled-in data
@@ -75,6 +88,11 @@ cat > "$RUN_DIR/metrics.json" <<JSON
   "harness": "$HARNESS",
   "run_number": $RUN_NUM,
   "graded_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "build": {
+    "attempted": true,
+    "success": $([ "$BUILD_EXIT" -eq 0 ] && echo true || echo false),
+    "exit_code": $BUILD_EXIT
+  },
   "tests": {
     "passed": $PASS,
     "total": $TOTAL,

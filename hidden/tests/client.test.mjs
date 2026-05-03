@@ -8,8 +8,10 @@
 //
 // What this tests is BEHAVIOUR — does the client correctly:
 //   - paginate /books with cursors (chase has_more all the way)
+//   - provide an ergonomic all-books pagination helper using one of a few
+//     accepted designs
 //   - filter genre and available_only correctly
-//   - fetch a single book and surface 404s usefully
+//   - fetch a single book and surface 400/404s usefully
 //   - return loans and let the caller distinguish active vs returned
 //   - create a loan, surface 409 on unavailable, surface 400 on bad input
 //   - poll a fine payment to terminal state
@@ -174,6 +176,12 @@ describe("structural", () => {
   it("client is bound", () => {
     expect(client).toBeTruthy();
   });
+
+  it("exposes the OpenAPI operationId methods", () => {
+    for (const name of ["listBooks", "getBook", "listMemberLoans", "createLoan", "payFine", "getPaymentStatus"]) {
+      expect(typeof client[name], `${name} should be a public method`).toBe("function");
+    }
+  });
 });
 
 describe("books: list & paginate", () => {
@@ -219,6 +227,36 @@ describe("books: list & paginate", () => {
     const data = extractData(result);
     for (const b of data) expect(b.copies_available).toBeGreaterThan(0);
   });
+
+  it("does not treat available_only false as true", async () => {
+    const fn = pick("listBooks", "getBooks", "books");
+    const result = await client[fn]({ available_only: false, limit: 100 });
+    const data = extractData(result);
+    expect(data.some((b) => b.copies_available === 0)).toBe(true);
+  });
+
+  it("surfaces invalid list parameters", async () => {
+    const fn = pick("listBooks", "getBooks", "books");
+    await expectUsefulRejection(() => client[fn]({ limit: 0 }), /400|invalid.?limit|between 1 and 100/);
+    await expectUsefulRejection(() => client[fn]({ genre: "space_opera", limit: 5 }), /400|invalid.?genre|genre/);
+    await expectUsefulRejection(() => client[fn]({ cursor: "not-a-real-cursor", limit: 5 }), /400|invalid.?cursor|cursor/);
+  });
+});
+
+describe("books: ergonomic pagination helper", () => {
+  it("collects all books across cursor pages using an accepted design", async () => {
+    const result = await collectAllBooks({ limit: 5 });
+    const data = extractData(result);
+    expect(data.length).toBe(12);
+    expect(new Set(data.map((b) => b.id)).size).toBe(12);
+  });
+
+  it("preserves filters while collecting all pages", async () => {
+    const result = await collectAllBooks({ genre: "fiction", limit: 2 });
+    const data = extractData(result);
+    expect(data.length).toBe(4);
+    for (const b of data) expect(b.genre).toBe("fiction");
+  });
 });
 
 describe("books: get one", () => {
@@ -232,13 +270,7 @@ describe("books: get one", () => {
 
   it("surfaces 404 in a useful way for missing book", async () => {
     const fn = pick("getBook", "fetchBook", "book");
-    let caught;
-    try { await client[fn]("does_not_exist"); }
-    catch (e) { caught = e; }
-    expect(caught, "should throw or otherwise surface the 404").toBeTruthy();
-    // The error should be inspectable — either status, code, or a recognisable shape
-    const surface = JSON.stringify(caught, Object.getOwnPropertyNames(caught ?? {}));
-    expect(surface.toLowerCase()).toMatch(/404|not.?found/);
+    await expectUsefulRejection(() => client[fn]("does_not_exist"), /404|not.?found/);
   });
 });
 
@@ -265,6 +297,12 @@ describe("loans: polymorphic response", () => {
     expect(arr.length).toBe(1);
     expect(arr[0].status).toBe("active");
   });
+
+  it("surfaces loan query and missing-member errors", async () => {
+    const fn = pick("listMemberLoans", "getMemberLoans", "memberLoans", "loans");
+    await expectUsefulRejection(() => client[fn]("m1", { status: "overdue" }), /400|invalid.?status|status/);
+    await expectUsefulRejection(() => client[fn]("missing_member"), /404|not.?found|member/);
+  });
 });
 
 describe("loans: create", () => {
@@ -279,12 +317,21 @@ describe("loans: create", () => {
 
   it("surfaces 409 when book unavailable", async () => {
     const fn = pick("createLoan", "newLoan", "loan");
-    let caught;
-    try { await client[fn]({ member_id: "m1", book_id: "b2" }); } // b2 has 0 copies available
-    catch (e) { caught = e; }
-    expect(caught).toBeTruthy();
-    const surface = JSON.stringify(caught, Object.getOwnPropertyNames(caught ?? {}));
-    expect(surface.toLowerCase()).toMatch(/409|conflict|unavailable/);
+    const caught = await expectUsefulRejection(
+      () => client[fn]({ member_id: "m1", book_id: "b2" }), // b2 has 0 copies available
+      /409|conflict|unavailable/,
+    );
+    expect(Number(caught.status), "errors should expose a numeric HTTP status").toBe(409);
+    expect(String(caught.code ?? caught.error?.code ?? ""), "errors should expose an API error code").toMatch(/unavailable|conflict/i);
+  });
+
+  it("surfaces bad loan input", async () => {
+    const fn = pick("createLoan", "newLoan", "loan");
+    await expectUsefulRejection(() => client[fn]({ member_id: "m1" }), /400|missing.?field|book_id/);
+    await expectUsefulRejection(
+      () => client[fn]({ member_id: "m1", book_id: "b3", duration_days: 0 }),
+      /400|invalid.?duration|duration_days/,
+    );
   });
 });
 
@@ -310,7 +357,76 @@ describe("payments: async flow", () => {
     expect(final).toBeTruthy();
     expect(final.status).toBe("succeeded");
   });
+
+  it("surfaces payment input and lookup errors", async () => {
+    const payFn = pick("payFine", "createPayment", "initiatePayment");
+    const pollFn = pick("getPaymentStatus", "getPayment", "pollPayment", "paymentStatus");
+
+    await expectUsefulRejection(
+      () => client[payFn]("f1", { amount_pence: 250, payment_method: "cheque" }),
+      /400|invalid.?method|payment_method/,
+    );
+    await expectUsefulRejection(
+      () => client[payFn]("missing_fine", { amount_pence: 250, payment_method: "card" }),
+      /404|not.?found|fine/,
+    );
+    await expectUsefulRejection(() => client[pollFn]("missing_payment"), /404|not.?found|payment/);
+  });
 });
+
+async function collectAllBooks(params) {
+  for (const name of ["listAllBooks", "getAllBooks", "allBooks", "collectBooks"]) {
+    if (typeof client[name] === "function") return client[name](params);
+  }
+
+  for (const name of ["iterBooks", "iterateBooks", "bookIterator"]) {
+    if (typeof client[name] === "function") {
+      const books = [];
+      for await (const book of client[name](params)) books.push(book);
+      return books;
+    }
+  }
+
+  const fn = pick("listBooks", "getBooks", "books");
+  if (fn) {
+    const result = await client[fn]({ ...params, autoPaginate: true });
+    const data = extractData(result);
+    if (data.length > params.limit) return result;
+  }
+
+  throw new Error(
+    "client should expose an all-books helper: listAllBooks/getAllBooks/allBooks/collectBooks, " +
+      "an async iterator helper, or listBooks({ autoPaginate: true })",
+  );
+}
+
+async function expectUsefulRejection(action, pattern) {
+  let caught;
+  try { await action(); }
+  catch (e) { caught = e; }
+  expect(caught, "request should reject or throw").toBeTruthy();
+  const surface = errorSurface(caught).toLowerCase();
+  expect(surface).toMatch(pattern);
+  return caught;
+}
+
+function errorSurface(error) {
+  const parts = [
+    error?.status,
+    error?.statusCode,
+    error?.code,
+    error?.message,
+    error?.name,
+    error?.body?.code,
+    error?.body?.message,
+    error?.error?.code,
+    error?.error?.message,
+  ];
+  try {
+    parts.push(JSON.stringify(error, Object.getOwnPropertyNames(error ?? {})));
+  } catch {}
+  return parts.filter((part) => part !== undefined && part !== null).join(" ");
+}
 
 // ---------- shape extractors ----------
 // Different harnesses may unwrap pagination differently. Allow a few shapes.
