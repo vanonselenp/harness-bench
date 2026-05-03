@@ -1,10 +1,9 @@
 // Hidden test suite. Run by hidden/grade.mjs after each harness run.
 //
-// PROBLEM: every harness will design a different client API. We can't
-// hard-code import paths or function names. So this suite uses an
-// "adapter" pattern: it imports whatever the harness produced and tries
-// a small number of conventional shapes to bind to it. If we can't bind,
-// we record that as a structural failure — itself a useful signal.
+// The benchmark requires a stable public contract: src/index.ts must export
+// a named LibraryClient class, constructible with { baseUrl }, whose public
+// operation methods match the OpenAPI operationIds. Structural failures are
+// useful signals, so the tests intentionally bind only through that contract.
 //
 // What this tests is BEHAVIOUR — does the client correctly:
 //   - paginate /books with cursors (chase has_more all the way)
@@ -21,7 +20,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -52,122 +51,50 @@ afterAll(() => {
   if (serverProc && !serverProc.killed) serverProc.kill();
 });
 
-// ---------- adapter binding ----------
-// We try a few conventional ways to instantiate whatever client the
-// harness produced. We record which one worked.
+// ---------- client binding ----------
+// The benchmark contract requires a named LibraryClient export from src/index.ts,
+// constructible with { baseUrl }. Tests bind only through that public contract.
 
 let client;
 let bindingMode;
 
 beforeAll(async () => {
-  const candidates = findClientEntrypoints(WORKSPACE);
-  if (candidates.length === 0) {
-    throw new Error("no client entrypoint found in workspace src/");
-  }
+  const entry = findClientEntrypoint(WORKSPACE);
+  const mod = await import(pathToFileURL(entry).href);
 
-  const errors = [];
-  for (const entry of candidates) {
-    try {
-      const mod = await import(pathToFileURL(entry).href);
-      const bound = tryBind(mod);
-      if (bound) {
-        client = bound.client;
-        bindingMode = `${entry} :: ${bound.mode}`;
-        return;
-      }
-    } catch (e) {
-      errors.push(`${entry}: ${e.message}`);
-    }
+  expect(typeof mod.LibraryClient, "src/index.ts should export a named LibraryClient class").toBe("function");
+
+  try {
+    client = new mod.LibraryClient({ baseUrl: BASE_URL });
+    bindingMode = `${entry} :: LibraryClient-options`;
+  } catch (e) {
+    throw new Error(`LibraryClient should be constructible with { baseUrl }: ${e.message}`);
   }
-  throw new Error(
-    `could not bind to client from any entrypoint. Tried:\n${errors.join("\n")}`,
-  );
 });
 
-function findClientEntrypoints(workspace) {
+function findClientEntrypoint(workspace) {
   const srcDir = join(workspace, "src");
-  if (!existsSync(srcDir)) return [];
-  const out = [];
+  if (!existsSync(srcDir)) throw new Error("workspace should contain src/");
+  if (!existsSync(join(srcDir, "index.ts"))) {
+    throw new Error("workspace should define the public client contract in src/index.ts");
+  }
 
-  // 1. dist build outputs (preferred — proves it compiles)
+  // The grader already requires npm run build to pass, so hidden tests import
+  // the compiled entrypoint generated from src/index.ts.
   const distDir = join(workspace, "dist");
   if (existsSync(distDir)) {
-    walkJs(distDir, out);
-  }
-  // 2. compiled .ts won't import directly; we rely on dist
-  // 3. fall back to .mjs/.js in src
-  walkJs(srcDir, out);
-
-  // prioritise files named index, client, library, api
-  const priority = (p) => {
-    const name = p.toLowerCase();
-    if (name.endsWith("/index.js") || name.endsWith("/index.mjs")) return 0;
-    if (name.includes("client")) return 1;
-    if (name.includes("library")) return 2;
-    if (name.includes("api")) return 3;
-    return 99;
-  };
-  return out.sort((a, b) => priority(a) - priority(b));
-}
-
-function walkJs(dir, acc) {
-  for (const entry of readdirSync(dir)) {
-    const p = join(dir, entry);
-    const s = statSync(p);
-    if (s.isDirectory()) walkJs(p, acc);
-    else if (entry.endsWith(".js") || entry.endsWith(".mjs")) acc.push(p);
-  }
-}
-
-function tryBind(mod) {
-  // Mode A: default export is a class
-  if (typeof mod.default === "function") {
-    try {
-      const c = new mod.default({ baseUrl: BASE_URL });
-      return { client: c, mode: "default-class-options" };
-    } catch {}
-    try {
-      const c = new mod.default(BASE_URL);
-      return { client: c, mode: "default-class-baseurl" };
-    } catch {}
-    try {
-      const c = mod.default({ baseUrl: BASE_URL });
-      if (c) return { client: c, mode: "default-factory-options" };
-    } catch {}
-  }
-  // Mode B: named export `LibraryClient` / `Client` / `createClient`
-  for (const key of ["LibraryClient", "Client", "ApiClient"]) {
-    if (typeof mod[key] === "function") {
-      try { return { client: new mod[key]({ baseUrl: BASE_URL }), mode: `class-${key}-options` }; } catch {}
-      try { return { client: new mod[key](BASE_URL), mode: `class-${key}-baseurl` }; } catch {}
+    for (const filename of ["index.js", "index.mjs"]) {
+      const entry = join(distDir, filename);
+      if (existsSync(entry)) return entry;
     }
   }
-  for (const key of ["createClient", "createLibraryClient", "client"]) {
-    if (typeof mod[key] === "function") {
-      try {
-        const c = mod[key]({ baseUrl: BASE_URL });
-        if (c) return { client: c, mode: `factory-${key}-options` };
-      } catch {}
-      try {
-        const c = mod[key](BASE_URL);
-        if (c) return { client: c, mode: `factory-${key}-baseurl` };
-      } catch {}
-    }
-  }
-  // Mode C: module itself is the client (functional style)
-  if (typeof mod.listBooks === "function" || typeof mod.getBook === "function") {
-    return { client: mod, mode: "module-as-client" };
-  }
-  return null;
+
+  throw new Error("no compiled client entrypoint found; expected dist/index.js generated from src/index.ts");
 }
 
-// Probe the bound client for method names. Each operation has several
-// likely names; we pick the first that exists.
-function pick(...names) {
-  for (const n of names) {
-    if (typeof client[n] === "function") return n;
-  }
-  return null;
+function operation(name) {
+  expect(typeof client[name], `${name} should be a public method`).toBe("function");
+  return client[name].bind(client);
 }
 
 // ---------- the actual tests ----------
@@ -175,6 +102,7 @@ function pick(...names) {
 describe("structural", () => {
   it("client is bound", () => {
     expect(client).toBeTruthy();
+    expect(bindingMode).toMatch(/LibraryClient-options$/);
   });
 
   it("exposes the OpenAPI operationId methods", () => {
@@ -186,9 +114,8 @@ describe("structural", () => {
 
 describe("books: list & paginate", () => {
   it("lists books on first page", async () => {
-    const fn = pick("listBooks", "getBooks", "books");
-    expect(fn, "client should expose a listBooks-like method").toBeTruthy();
-    const result = await client[fn]({ limit: 5 });
+    const listBooks = operation("listBooks");
+    const result = await listBooks({ limit: 5 });
     const data = extractData(result);
     expect(Array.isArray(data)).toBe(true);
     expect(data.length).toBe(5);
@@ -197,12 +124,12 @@ describe("books: list & paginate", () => {
   });
 
   it("paginates through all books with cursor", async () => {
-    const fn = pick("listBooks", "getBooks", "books");
+    const listBooks = operation("listBooks");
     const seen = new Set();
     let cursor;
     let safety = 0;
     while (safety++ < 20) {
-      const result = await client[fn]({ limit: 5, cursor });
+      const result = await listBooks({ limit: 5, cursor });
       const data = extractData(result);
       for (const b of data) seen.add(b.id);
       const next = extractNextCursor(result);
@@ -214,32 +141,32 @@ describe("books: list & paginate", () => {
   });
 
   it("filters by genre", async () => {
-    const fn = pick("listBooks", "getBooks", "books");
-    const result = await client[fn]({ genre: "fiction", limit: 100 });
+    const listBooks = operation("listBooks");
+    const result = await listBooks({ genre: "fiction", limit: 100 });
     const data = extractData(result);
     expect(data.length).toBeGreaterThan(0);
     for (const b of data) expect(b.genre).toBe("fiction");
   });
 
   it("respects available_only filter", async () => {
-    const fn = pick("listBooks", "getBooks", "books");
-    const result = await client[fn]({ available_only: true, limit: 100 });
+    const listBooks = operation("listBooks");
+    const result = await listBooks({ available_only: true, limit: 100 });
     const data = extractData(result);
     for (const b of data) expect(b.copies_available).toBeGreaterThan(0);
   });
 
   it("does not treat available_only false as true", async () => {
-    const fn = pick("listBooks", "getBooks", "books");
-    const result = await client[fn]({ available_only: false, limit: 100 });
+    const listBooks = operation("listBooks");
+    const result = await listBooks({ available_only: false, limit: 100 });
     const data = extractData(result);
     expect(data.some((b) => b.copies_available === 0)).toBe(true);
   });
 
   it("surfaces invalid list parameters", async () => {
-    const fn = pick("listBooks", "getBooks", "books");
-    await expectUsefulRejection(() => client[fn]({ limit: 0 }), /400|invalid.?limit|between 1 and 100/);
-    await expectUsefulRejection(() => client[fn]({ genre: "space_opera", limit: 5 }), /400|invalid.?genre|genre/);
-    await expectUsefulRejection(() => client[fn]({ cursor: "not-a-real-cursor", limit: 5 }), /400|invalid.?cursor|cursor/);
+    const listBooks = operation("listBooks");
+    await expectUsefulRejection(() => listBooks({ limit: 0 }), /400|invalid.?limit|between 1 and 100/);
+    await expectUsefulRejection(() => listBooks({ genre: "space_opera", limit: 5 }), /400|invalid.?genre|genre/);
+    await expectUsefulRejection(() => listBooks({ cursor: "not-a-real-cursor", limit: 5 }), /400|invalid.?cursor|cursor/);
   });
 });
 
@@ -261,24 +188,22 @@ describe("books: ergonomic pagination helper", () => {
 
 describe("books: get one", () => {
   it("fetches a known book", async () => {
-    const fn = pick("getBook", "fetchBook", "book");
-    expect(fn).toBeTruthy();
-    const book = await client[fn]("b1");
+    const getBook = operation("getBook");
+    const book = await getBook("b1");
     expect(book.id).toBe("b1");
     expect(book.title).toMatch(/Pragmatic/);
   });
 
   it("surfaces 404 in a useful way for missing book", async () => {
-    const fn = pick("getBook", "fetchBook", "book");
-    await expectUsefulRejection(() => client[fn]("does_not_exist"), /404|not.?found/);
+    const getBook = operation("getBook");
+    await expectUsefulRejection(() => getBook("does_not_exist"), /404|not.?found/);
   });
 });
 
 describe("loans: polymorphic response", () => {
   it("returns loans for a member with mixed statuses", async () => {
-    const fn = pick("listMemberLoans", "getMemberLoans", "memberLoans", "loans");
-    expect(fn).toBeTruthy();
-    const loans = await client[fn]("m1");
+    const listMemberLoans = operation("listMemberLoans");
+    const loans = await listMemberLoans("m1");
     const arr = Array.isArray(loans) ? loans : extractData(loans);
     expect(arr.length).toBe(3);
     const active = arr.filter((l) => l.status === "active");
@@ -291,34 +216,33 @@ describe("loans: polymorphic response", () => {
   });
 
   it("filters loans by status", async () => {
-    const fn = pick("listMemberLoans", "getMemberLoans", "memberLoans", "loans");
-    const active = await client[fn]("m1", { status: "active" });
+    const listMemberLoans = operation("listMemberLoans");
+    const active = await listMemberLoans("m1", { status: "active" });
     const arr = Array.isArray(active) ? active : extractData(active);
     expect(arr.length).toBe(1);
     expect(arr[0].status).toBe("active");
   });
 
   it("surfaces loan query and missing-member errors", async () => {
-    const fn = pick("listMemberLoans", "getMemberLoans", "memberLoans", "loans");
-    await expectUsefulRejection(() => client[fn]("m1", { status: "overdue" }), /400|invalid.?status|status/);
-    await expectUsefulRejection(() => client[fn]("missing_member"), /404|not.?found|member/);
+    const listMemberLoans = operation("listMemberLoans");
+    await expectUsefulRejection(() => listMemberLoans("m1", { status: "overdue" }), /400|invalid.?status|status/);
+    await expectUsefulRejection(() => listMemberLoans("missing_member"), /404|not.?found|member/);
   });
 });
 
 describe("loans: create", () => {
   it("creates a loan for an available book", async () => {
-    const fn = pick("createLoan", "newLoan", "loan");
-    expect(fn).toBeTruthy();
-    const loan = await client[fn]({ member_id: "m1", book_id: "b3" });
+    const createLoan = operation("createLoan");
+    const loan = await createLoan({ member_id: "m1", book_id: "b3" });
     expect(loan.status).toBe("active");
     expect(loan.book_id).toBe("b3");
     expect(loan).toHaveProperty("due_date");
   });
 
   it("surfaces 409 when book unavailable", async () => {
-    const fn = pick("createLoan", "newLoan", "loan");
+    const createLoan = operation("createLoan");
     const caught = await expectUsefulRejection(
-      () => client[fn]({ member_id: "m1", book_id: "b2" }), // b2 has 0 copies available
+      () => createLoan({ member_id: "m1", book_id: "b2" }), // b2 has 0 copies available
       /409|conflict|unavailable/,
     );
     expect(Number(caught.status), "errors should expose a numeric HTTP status").toBe(409);
@@ -326,10 +250,10 @@ describe("loans: create", () => {
   });
 
   it("surfaces bad loan input", async () => {
-    const fn = pick("createLoan", "newLoan", "loan");
-    await expectUsefulRejection(() => client[fn]({ member_id: "m1" }), /400|missing.?field|book_id/);
+    const createLoan = operation("createLoan");
+    await expectUsefulRejection(() => createLoan({ member_id: "m1" }), /400|missing.?field|book_id/);
     await expectUsefulRejection(
-      () => client[fn]({ member_id: "m1", book_id: "b3", duration_days: 0 }),
+      () => createLoan({ member_id: "m1", book_id: "b3", duration_days: 0 }),
       /400|invalid.?duration|duration_days/,
     );
   });
@@ -337,18 +261,16 @@ describe("loans: create", () => {
 
 describe("payments: async flow", () => {
   it("initiates payment and polls to completion", async () => {
-    const payFn = pick("payFine", "createPayment", "initiatePayment");
-    expect(payFn).toBeTruthy();
-    const pollFn = pick("getPaymentStatus", "getPayment", "pollPayment", "paymentStatus");
-    expect(pollFn).toBeTruthy();
+    const payFine = operation("payFine");
+    const getPaymentStatus = operation("getPaymentStatus");
 
-    const initial = await client[payFn]("f1", { amount_pence: 250, payment_method: "card" });
+    const initial = await payFine("f1", { amount_pence: 250, payment_method: "card" });
     expect(initial.payment_id).toBeTruthy();
     expect(initial.status).toBe("pending");
 
     let final;
     for (let i = 0; i < 10; i++) {
-      const polled = await client[pollFn](initial.payment_id);
+      const polled = await getPaymentStatus(initial.payment_id);
       if (polled.status === "succeeded" || polled.status === "failed") {
         final = polled;
         break;
@@ -359,18 +281,18 @@ describe("payments: async flow", () => {
   });
 
   it("surfaces payment input and lookup errors", async () => {
-    const payFn = pick("payFine", "createPayment", "initiatePayment");
-    const pollFn = pick("getPaymentStatus", "getPayment", "pollPayment", "paymentStatus");
+    const payFine = operation("payFine");
+    const getPaymentStatus = operation("getPaymentStatus");
 
     await expectUsefulRejection(
-      () => client[payFn]("f1", { amount_pence: 250, payment_method: "cheque" }),
+      () => payFine("f1", { amount_pence: 250, payment_method: "cheque" }),
       /400|invalid.?method|payment_method/,
     );
     await expectUsefulRejection(
-      () => client[payFn]("missing_fine", { amount_pence: 250, payment_method: "card" }),
+      () => payFine("missing_fine", { amount_pence: 250, payment_method: "card" }),
       /404|not.?found|fine/,
     );
-    await expectUsefulRejection(() => client[pollFn]("missing_payment"), /404|not.?found|payment/);
+    await expectUsefulRejection(() => getPaymentStatus("missing_payment"), /404|not.?found|payment/);
   });
 });
 
@@ -387,12 +309,10 @@ async function collectAllBooks(params) {
     }
   }
 
-  const fn = pick("listBooks", "getBooks", "books");
-  if (fn) {
-    const result = await client[fn]({ ...params, autoPaginate: true });
-    const data = extractData(result);
-    if (data.length > params.limit) return result;
-  }
+  const listBooks = operation("listBooks");
+  const result = await listBooks({ ...params, autoPaginate: true });
+  const data = extractData(result);
+  if (data.length > params.limit) return result;
 
   throw new Error(
     "client should expose an all-books helper: listAllBooks/getAllBooks/allBooks/collectBooks, " +
