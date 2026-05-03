@@ -22,6 +22,9 @@ The OpenAPI spec is in `spec/library-api.yaml`. Your code goes in `src/`.
   runtime dependencies. You may add dev dependencies if strictly needed.
 - The base URL for the API is configurable; default to
   `http://localhost:4040`.
+- For evaluation consistency, export a `LibraryClient` class from
+  `src/index.ts`, constructible with `{ baseUrl }`, whose public method names
+  exactly match the OpenAPI `operationId`s.
 
 # What "complete" looks like
 
